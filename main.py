@@ -3,6 +3,7 @@ import logging
 import sqlite3
 import os
 import re
+import sys
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -35,21 +36,28 @@ def rename_tables(cursor, prefix, dry_run=False):
         A dictionary mapping old table names to new table names.
     """
     try:
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        # Internal sqlite_% tables (sqlite_sequence backs AUTOINCREMENT) are
+        # not user tables: SQLite refuses to rename them, and counting them
+        # burned a number in the sequence, leaving gaps like table_1, table_3.
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
         tables = [row[0] for row in cursor.fetchall()]
 
         table_mapping = {}
         for i, old_name in enumerate(tables):
             new_name = f"{prefix}{i+1}"
-            table_mapping[old_name] = new_name
 
             if not dry_run:
                 try:
                     cursor.execute(f"ALTER TABLE \"{old_name}\" RENAME TO \"{new_name}\";")
                     logging.info(f"Renamed table '{old_name}' to '{new_name}'")
+                    # Only record renames that actually happened. rename_columns
+                    # trusts this mapping, so a failed rename recorded here
+                    # would send it to a table name that does not exist.
+                    table_mapping[old_name] = new_name
                 except sqlite3.Error as e:
                     logging.error(f"Failed to rename table '{old_name}' to '{new_name}': {e}")
             else:
+                table_mapping[old_name] = new_name
                 logging.info(f"(Dry run) Renaming table '{old_name}' to '{new_name}'")
 
         return table_mapping
@@ -139,12 +147,16 @@ def main():
 
     except FileNotFoundError as e:
         logging.error(f"File error: {e}")
+        sys.exit(1)
     except ValueError as e:
         logging.error(f"Value error: {e}")
+        sys.exit(1)
     except sqlite3.Error as e:
         logging.error(f"Database error: {e}")
+        sys.exit(1)
     except Exception as e:
         logging.error(f"An unexpected error occurred: {e}")
+        sys.exit(1)
     finally:
         if 'conn' in locals():
             conn.close()
