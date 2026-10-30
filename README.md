@@ -1,3 +1,5 @@
+![Banner](banner.png)
+
 # dm-data-renamer
 Rename columns or tables in a database or file to generic names (e.g., column1, table_a) while preserving relationships based on foreign keys or naming conventions. Useful for quickly anonymizing schema information. - Focused on Tools designed to generate or mask sensitive data with realistic-looking but meaningless values
 
