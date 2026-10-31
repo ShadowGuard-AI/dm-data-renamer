@@ -9,6 +9,8 @@ Rename columns or tables in a database or file to generic names (e.g., column1, 
 ## Usage
 `./dm-data-renamer [params]`
 
+The run exits 1 when the input is not a readable database, when it holds no user tables, or when any table or column rename fails. In the failure case the changes are rolled back where the database allows it. The completed successfully line and exit 0 mean every table and column rename succeeded.
+
 ## Parameters
 - `-h`: Show help message and exit
 - `--prefix_table`: No description provided

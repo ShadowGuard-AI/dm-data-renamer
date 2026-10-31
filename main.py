@@ -33,37 +33,38 @@ def rename_tables(cursor, prefix, dry_run=False):
         dry_run: If True, performs a dry run without applying changes.
 
     Returns:
-        A dictionary mapping old table names to new table names.
+        A tuple of a dictionary mapping old table names to new table
+        names, the number of failed renames, and the number of user
+        tables found. A failure to read the database raises sqlite3.Error
+        so the caller can exit 1 instead of reporting success.
     """
-    try:
-        # Internal sqlite_% tables (sqlite_sequence backs AUTOINCREMENT) are
-        # not user tables: SQLite refuses to rename them, and counting them
-        # burned a number in the sequence, leaving gaps like table_1, table_3.
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
-        tables = [row[0] for row in cursor.fetchall()]
+    # Internal sqlite_% tables (sqlite_sequence backs AUTOINCREMENT) are
+    # not user tables: SQLite refuses to rename them, and counting them
+    # burned a number in the sequence, leaving gaps like table_1, table_3.
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+    tables = [row[0] for row in cursor.fetchall()]
 
-        table_mapping = {}
-        for i, old_name in enumerate(tables):
-            new_name = f"{prefix}{i+1}"
+    table_mapping = {}
+    failed = 0
+    for i, old_name in enumerate(tables):
+        new_name = f"{prefix}{i+1}"
 
-            if not dry_run:
-                try:
-                    cursor.execute(f"ALTER TABLE \"{old_name}\" RENAME TO \"{new_name}\";")
-                    logging.info(f"Renamed table '{old_name}' to '{new_name}'")
-                    # Only record renames that actually happened. rename_columns
-                    # trusts this mapping, so a failed rename recorded here
-                    # would send it to a table name that does not exist.
-                    table_mapping[old_name] = new_name
-                except sqlite3.Error as e:
-                    logging.error(f"Failed to rename table '{old_name}' to '{new_name}': {e}")
-            else:
+        if not dry_run:
+            try:
+                cursor.execute(f"ALTER TABLE \"{old_name}\" RENAME TO \"{new_name}\";")
+                logging.info(f"Renamed table '{old_name}' to '{new_name}'")
+                # Only record renames that actually happened. rename_columns
+                # trusts this mapping, so a failed rename recorded here
+                # would send it to a table name that does not exist.
                 table_mapping[old_name] = new_name
-                logging.info(f"(Dry run) Renaming table '{old_name}' to '{new_name}'")
+            except sqlite3.Error as e:
+                failed += 1
+                logging.error(f"Failed to rename table '{old_name}' to '{new_name}': {e}")
+        else:
+            table_mapping[old_name] = new_name
+            logging.info(f"(Dry run) Renaming table '{old_name}' to '{new_name}'")
 
-        return table_mapping
-    except sqlite3.Error as e:
-        logging.error(f"Error during table renaming: {e}")
-        return {}
+    return table_mapping, failed, len(tables)
 
 
 def rename_columns(cursor, prefix, table_mapping, dry_run=False):
@@ -75,27 +76,30 @@ def rename_columns(cursor, prefix, table_mapping, dry_run=False):
         prefix: Prefix for renamed columns.
         table_mapping: A dictionary mapping old table names to new table names.
         dry_run: If True, performs a dry run without applying changes.
+
+    Returns:
+        The number of failed column renames.
     """
-    try:
-        for table_name in table_mapping.values():
-            cursor.execute(f"PRAGMA table_info(\"{table_name}\");")
-            columns = [row[1] for row in cursor.fetchall()]
+    failed = 0
+    for table_name in table_mapping.values():
+        cursor.execute(f"PRAGMA table_info(\"{table_name}\");")
+        columns = [row[1] for row in cursor.fetchall()]
 
-            column_mapping = {}
-            for i, old_name in enumerate(columns):
-                new_name = f"{prefix}{i+1}"
-                column_mapping[old_name] = new_name
+        column_mapping = {}
+        for i, old_name in enumerate(columns):
+            new_name = f"{prefix}{i+1}"
+            column_mapping[old_name] = new_name
 
-                if not dry_run:
-                    try:
-                        cursor.execute(f"ALTER TABLE \"{table_name}\" RENAME COLUMN \"{old_name}\" TO \"{new_name}\";")
-                        logging.info(f"Renamed column '{old_name}' in table '{table_name}' to '{new_name}'")
-                    except sqlite3.Error as e:
-                        logging.error(f"Failed to rename column '{old_name}' in table '{table_name}' to '{new_name}': {e}")
-                else:
-                    logging.info(f"(Dry run) Renaming column '{old_name}' in table '{table_name}' to '{new_name}'")
-    except sqlite3.Error as e:
-        logging.error(f"Error during column renaming: {e}")
+            if not dry_run:
+                try:
+                    cursor.execute(f"ALTER TABLE \"{table_name}\" RENAME COLUMN \"{old_name}\" TO \"{new_name}\";")
+                    logging.info(f"Renamed column '{old_name}' in table '{table_name}' to '{new_name}'")
+                except sqlite3.Error as e:
+                    failed += 1
+                    logging.error(f"Failed to rename column '{old_name}' in table '{table_name}' to '{new_name}': {e}")
+            else:
+                logging.info(f"(Dry run) Renaming column '{old_name}' in table '{table_name}' to '{new_name}'")
+    return failed
 
 
 def handle_foreign_key_constraints(cursor, table_mapping, dry_run=False):
@@ -135,8 +139,26 @@ def main():
         conn = sqlite3.connect(args.database)
         cursor = conn.cursor()
 
-        table_mapping = rename_tables(cursor, args.prefix_table, args.dry_run)
-        rename_columns(cursor, args.prefix_column, table_mapping, args.dry_run)
+        # Run the renames inside one explicit transaction so a failed
+        # rename can be rolled back instead of leaving a partly renamed
+        # schema committed. Without this, each ALTER is committed on
+        # its own by the sqlite3 module defaults.
+        if not args.dry_run:
+            cursor.execute("BEGIN;")
+
+        table_mapping, failed_tables, total_tables = rename_tables(cursor, args.prefix_table, args.dry_run)
+        if total_tables == 0:
+            logging.error("Database contains no user tables to rename.")
+            if not args.dry_run:
+                conn.rollback()
+            sys.exit(1)
+        failed_columns = rename_columns(cursor, args.prefix_column, table_mapping, args.dry_run)
+        failed = failed_tables + failed_columns
+        if failed > 0:
+            logging.error(f"Database renaming incomplete: {failed} rename(s) failed.")
+            if not args.dry_run:
+                conn.rollback()
+            sys.exit(1)
         handle_foreign_key_constraints(cursor, table_mapping, args.dry_run) # Placeholder for constraint handling
 
         if not args.dry_run:
