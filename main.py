@@ -41,6 +41,10 @@ def rename_tables(cursor, prefix, dry_run=False):
     # Internal sqlite_% tables (sqlite_sequence backs AUTOINCREMENT) are
     # not user tables: SQLite refuses to rename them, and counting them
     # burned a number in the sequence, leaving gaps like table_1, table_3.
+    # No ORDER BY here, so the numbering follows the order sqlite_master
+    # hands the tables back, which is creation order in practice. The same
+    # database renamed twice from scratch gets the same numbering; a table
+    # created later takes the next number, not a number based on its name.
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
     tables = [row[0] for row in cursor.fetchall()]
 
@@ -81,6 +85,10 @@ def rename_columns(cursor, prefix, table_mapping, dry_run=False):
         The number of failed column renames.
     """
     failed = 0
+    # This has to run after the table renames, and it reads the NEW names
+    # out of the mapping. Column numbering restarts at 1 in every table, so
+    # column_1 exists once per table: the generic names are only unique
+    # inside their own table, never across the database.
     for table_name in table_mapping.values():
         cursor.execute(f"PRAGMA table_info(\"{table_name}\");")
         columns = [row[1] for row in cursor.fetchall()]
@@ -126,7 +134,12 @@ def main():
     """
     args = setup_argparse()
 
-    # Configure custom logging file
+    # I have to be honest about this block, because I checked: the
+    # basicConfig at the top of the file already configured the root logger,
+    # so this second basicConfig call is ignored and --log_file never
+    # creates a file. The console handler added below then doubles every
+    # line on stderr, one copy from each handler. Fixing that is a behavior
+    # change; here I only mark that the option does not do what it says.
     logging.basicConfig(filename=args.log_file, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
