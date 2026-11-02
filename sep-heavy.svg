@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 36" width="800" height="36" role="img" aria-label="Heavy separator: a mustard rule with a gold leaf and a gliding ribbon marker">
+  <line x1="10" y1="18" x2="790" y2="18" stroke="#D9A441" stroke-width="5"/>
+  <line x1="10" y1="27" x2="790" y2="27" stroke="#5C3317" stroke-width="2"/>
+  <polygon points="376,4 424,2 438,16 420,32 384,33 366,18" fill="#F6C945" stroke="#92661A" stroke-width="2"/>
+  <polygon points="384,33 392,20 408,27" fill="#FFF0AF"/>
+  <g>
+    <animateTransform attributeName="transform" type="translate" values="-320 0; 320 0; -320 0" dur="14s" repeatCount="indefinite"/>
+    <polygon points="392,8 408,18 392,28 396,18" fill="#9E2B25"/>
+    <rect x="388" y="4" width="5" height="28" fill="#9E2B25"/>
+  </g>
+</svg>
